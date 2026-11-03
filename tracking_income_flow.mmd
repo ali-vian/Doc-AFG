@@ -1,0 +1,96 @@
+flowchart TD
+    %% Inisiasi Tutup Shift
+    StartKasir([Kasir Selesai Shift]) --> TutupShift["ShiftController::actionClose:
+    Kasir Input Modal Tutup (capital_close)"]
+    
+    TutupShift --> PilihPenempatan{"Pilih Penempatan Uang?"}
+    PilihPenempatan -->|"Simpan di Brankas (id_omzet_receiver kosong)"| Brankas["Posisi: Brankas (0)
+    (Uang disimpan di brankas kasir)"]
+    PilihPenempatan -->|"Serahkan ke Pegawai (id_omzet_receiver diisi)"| PegawaiDirect["Posisi: Pegawai (1)
+    (Uang langsung dipegang kurir/staf)"]
+    
+    %% Perpindahan Fisik
+    Brankas -->|actionProcess + Foto Bukti/Kamera| Pegawai["Posisi: Pegawai (1)
+    (Serah terima ke staf/kurir cabang)"]
+    PegawaiDirect --> Pegawai
+    Pegawai -->|actionProcess + Foto Bukti/Kamera| Screening["Posisi: Screening Keuangan (2)
+    (Laporan & uang diserahkan ke Akunting)"]
+    
+    %% Pengecekan Selisih di Screening
+    Screening --> CekSelisih{Kondisi Selisih Kasir}
+    
+    %% Kasus 1: Sesuai / Tanpa Selisih
+    CekSelisih -->|"Selisih = 0 (Pas/Sesuai)"| SiapApprove["Status Hijau: Siap Disetujui Akunting"]
+    
+    %% Kasus 2: Selisih Lebih (Surplus > 0)
+    CekSelisih -->|"Selisih > 0 (Uang Lebih)"| CekPickedUp{"Dicentang Picked-up?"}
+    CekPickedUp -->|"Ya (is_picked_up = 1)"| SettledSurplus["actionTogglePickedUp:
+    total_tunai_pickup = totalCashNet + selisih
+    need_sm_approval = 0
+    (Uang lebih diakui, TANPA Approval SM)"]
+    SettledSurplus --> SiapApprove
+    CekPickedUp -->|"Tidak (is_picked_up = 0)"| SelisihGantungSurplus["Status Kuning:
+    Kelebihan Uang Kasir Belum Ditandai Picked-up"]
+    
+    %% Kasus 3: Selisih Kurang (Minus / Tekor < 0)
+    CekSelisih -->|"Selisih < 0 (Uang Tekor)"| CekSettled{"Dicentang Sudah Diganti?"}
+    CekSettled -->|"Ya (is_selisih_settled = 1)"| SettledMinus["actionToggleSelisihSettled:
+    total_tunai_pickup = totalCashNet
+    need_sm_approval = 0
+    (Kasir ganti tekor, TANPA Approval SM)"]
+    SettledMinus --> SiapApprove
+    CekSettled -->|"Tidak (is_selisih_settled = 0)"| SelisihGantungMinus["Status Kuning:
+    Kasir Minus Belum Diganti"]
+    
+    %% Jalur Eskalasi SM (Hanya jika belum dicentang)
+    SelisihGantungSurplus --> EskalasiSM["actionToggleNeedSmApproval:
+    Staff Akunting mengeskalasikan ke SM
+    (need_sm_approval = 1, request_sm_approval = 1)"]
+    SelisihGantungMinus --> EskalasiSM
+    
+    EskalasiSM --> PrintBA["actionPrintBa:
+    Store Manager (SM) Wajib Cetak Berita Acara (BA)
+    (is_ba_printed = 1, Watermark ASLI, Audit ba_note)"]
+    PrintBA --> ApproveSM["actionApprove (Oleh SM):
+    is_sm_approved = 1, need_sm_approval = 0
+    (Status kembali ke Screening, is_approved = 0)"]
+    ApproveSM --> SiapApprove
+    
+    %% Jalur Approval Akunting
+    SiapApprove --> CekRantaiShift{"Cek Shift Sebelumnya
+    di Cabang & Bulan Ini?"}
+    CekRantaiShift -->|"Ada shift sebelumnya masih Kuning"| TolakApprove["Peringatan: Selesaikan shift
+    sebelumnya terlebih dahulu!"]
+    CekRantaiShift -->|"Shift sebelumnya aman (Hijau)"| ApproveScreening["actionApprove (Oleh Staff Akunting):
+    is_approved = 1 (Screening Selesai)"]
+    
+    %% Jalur Penyerahan ke Kurir / Pickup
+    ApproveScreening -->|actionProcess + Foto Bukti/Kamera| PilihanPickup{"Pilih Jalur Pickup"}
+    PilihanPickup -->|"Pickup Pusat (Kurir Pusat)"| PickupPusat["Posisi: Pickup Pusat (3)
+    (id_user_receiver auto 702, is_approved = 0)"]
+    PilihanPickup -->|"Pickup Mandiri (Cabang Setor Sendiri)"| PickupMandiri["Posisi: Pickup Mandiri (4)
+    (id_user_receiver NULL, is_approved = 0)"]
+    
+    %% Jalur Approval Leader Accounting & Penjurnalan Bank
+    PickupPusat --> ReviewLeader["Leader Accounting Review:
+    Cek Total Tunai Pickup (Bisa inline edit)"]
+    PickupMandiri --> ReviewLeader
+    
+    ReviewLeader --> ModalBank["actionApprove:
+    Buka Modal & Pilih Akun COA Bank Tujuan (1.1.1.x)"]
+    
+    ModalBank --> ExecuteApprovalLeader["Simpan & Approve Leader:
+    Begin Database Transaction"]
+    
+    ExecuteApprovalLeader --> UpdatePickup["UPDATE trs_omzet_position SET is_approved = 1"]
+    ExecuteApprovalLeader --> GenJournal["JournalHelper::generateJournalNumber('PKP', branch):
+    INSERT INTO trs_journal (JU-PKP-..., source = pickup_omzet:id)"]
+    ExecuteApprovalLeader --> InsertDetailJurnal["INSERT INTO trs_journal_detail:
+    - Debit: Akun Bank Terpilih
+    - Kredit: Kas Utama Cabang (1.1.1.1)"]
+    ExecuteApprovalLeader --> InsertPegawaiBank["INSERT INTO trs_omzet_position:
+    Posisi: Pegawai Bank (5), is_approved = 2"]
+    
+    InsertPegawaiBank --> CommitDB["Commit Transaction:
+    Siklus Tracking Selesai Sempurna"]
+    CommitDB --> Selesai([Uang Masuk Rekening Bank Perusahaan])

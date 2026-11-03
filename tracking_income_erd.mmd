@@ -1,0 +1,125 @@
+erDiagram
+    mst_branch ||--o{ trs_schedule : "has"
+    user ||--o{ trs_schedule : "operates"
+    trs_schedule ||--o{ trs_omzet_position : "tracks_movement"
+    trs_schedule ||--o{ trs_sale : "records_live"
+    trs_schedule ||--o{ trs_sale_manual : "records_manual"
+    trs_schedule ||--o{ trs_accounting : "incurs_expenses"
+    user ||--o{ trs_omzet_position : "sends"
+    user ||--o{ trs_omzet_position : "receives"
+    trs_schedule ||--o{ trs_journal : "generates_pickup_journal"
+    trs_journal ||--|{ trs_journal_detail : "contains"
+    mst_coa ||--o{ trs_journal_detail : "categorizes"
+
+    mst_branch {
+        int id_branch PK
+        string name
+        string alias
+        string address
+        string no_telp
+        string email
+        string logo
+    }
+
+    user {
+        int user_id PK
+        string username
+        string name
+        string signature
+    }
+
+    trs_schedule {
+        int id_schedule PK
+        int id_branch FK
+        int user_id FK
+        int id_workhour FK
+        date date
+        string workhour_name
+        datetime datetime_open
+        datetime datetime_close
+        float capital_open
+        float capital_close
+        float total_cash_adj
+        float total_tunai_pickup
+        int is_picked_up
+        int is_selisih_settled
+        int need_sm_approval
+        int is_sm_approved
+        int is_ba_printed
+        string ba_note
+        int id_sm_approver
+        datetime sm_approved_at
+    }
+
+    trs_omzet_position {
+        int id_omzet_position PK
+        int id_schedule FK
+        int id_user_send FK
+        int id_user_receiver FK
+        int status
+        int is_approved
+        int id_bank FK
+        string image
+        string note
+        datetime created_at
+    }
+
+    trs_sale {
+        int id_sale PK
+        int id_schedule FK
+        int id_branch FK
+        int id_user_input FK
+        float total_price
+        float discount
+        int payment_type
+        int status
+        int type
+        datetime trx_at
+    }
+
+    trs_sale_manual {
+        int id_sale PK
+        int id_schedule FK
+        int id_branch FK
+        float total_price
+        float discount
+        int payment_type
+        int id_sale_live
+        datetime trx_at
+    }
+
+    trs_accounting {
+        int id_accounting PK
+        int id_branch FK
+        int id_workhour FK
+        int id_user_input FK
+        date date_input
+        string type
+        int payment_type
+        float total
+    }
+
+    trs_journal {
+        int id_journal PK
+        int id_branch FK
+        string number
+        date date
+        string source
+        string note
+        int created_by FK
+    }
+
+    trs_journal_detail {
+        int id_journal_detail PK
+        int id_journal FK
+        int id_coa FK
+        float debit
+        float kredit
+        string note
+    }
+
+    mst_coa {
+        int id_coa PK
+        string code
+        string name
+    }

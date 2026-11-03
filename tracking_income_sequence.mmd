@@ -1,0 +1,78 @@
+sequenceDiagram
+    autonumber
+    actor Kasir as Kasir / Petugas Shift
+    actor SM as Store Manager (SM)
+    actor StaffAkun as Staff Akunting
+    actor LeaderAkun as Leader Accounting
+    participant Controller as TrackingIncomeController
+    participant ModelSch as TrsSchedule
+    participant ModelOp as TrsOmzetPosition
+    participant Helper as JournalHelper
+    participant DB as MySQL Database
+
+    Note over Kasir, ModelOp: 1. Penutupan Shift & Pemindahan Fisik Kasir
+    Kasir->>Controller: actionProcess(id) [Pindah Brankas -> Pegawai -> Screening]
+    Controller->>Controller: canMove(model) otorisasi cek
+    Controller->>ModelOp: save() [status = STAT_SCREENING (2), is_approved = 0]
+    ModelOp->>DB: INSERT INTO trs_omzet_position
+
+    Note over StaffAkun, SM: 2. Screening Keuangan & Penanganan Selisih
+    StaffAkun->>Controller: actionIndex()
+    Controller->>ModelOp: getScreeningDetails(id_schedule)
+    ModelOp->>DB: Query Sales (trs_sale), Accounting (trs_accounting), & Jurnal
+    ModelOp-->>Controller: Return diffs
+
+    alt Kondisi A: Selisih Lebih & Dicentang Picked-up (is_picked_up = 1)
+        Kasir->>Controller: actionTogglePickedUp(id)
+        Controller->>ModelSch: total_tunai_pickup = cashNet + selisih, need_sm_approval = 0
+        ModelSch->>DB: UPDATE trs_schedule
+        Note over StaffAkun: Uang lebih diakui, status hijau tanpa Approval SM
+
+    else Kondisi B: Selisih Tekor & Dicentang Sudah Diganti (is_selisih_settled = 1)
+        Kasir->>Controller: actionToggleSelisihSettled(id)
+        Controller->>ModelSch: total_tunai_pickup = cashNet, need_sm_approval = 0
+        ModelSch->>DB: UPDATE trs_schedule
+        Note over StaffAkun: Tekor sudah diganti kasir, status hijau tanpa Approval SM
+
+    else Kondisi C: Selisih Belum Dicentang (Tekor Belum Diganti / Lebih Belum Di-pickup)
+        StaffAkun->>Controller: actionToggleNeedSmApproval(id) [Eskalasi ke SM]
+        Controller->>ModelSch: need_sm_approval = 1, request_sm_approval = 1
+        ModelSch->>DB: UPDATE trs_schedule
+        
+        SM->>Controller: actionPrintBa(id) [Wajib dicetak oleh SM terlebih dahulu]
+        Controller->>ModelSch: recordBaPrint(user)
+        ModelSch->>DB: UPDATE trs_schedule SET is_ba_printed = 1, ba_note = JSON
+        Controller-->>SM: Render print-ba.php (Dokumen Resmi BA)
+        
+        SM->>Controller: actionApprove(id) [Persetujuan SM]
+        Controller->>ModelSch: is_sm_approved = 1, need_sm_approval = 0
+        Controller->>ModelOp: status = STAT_SCREENING, is_approved = 0
+        ModelSch->>DB: UPDATE trs_schedule & trs_omzet_position (Commit)
+        Note over StaffAkun: Disetujui SM, selisih lolos screening (status hijau)
+    end
+
+    Note over StaffAkun, ModelOp: 3. Approval Screening Akunting
+    StaffAkun->>Controller: actionApprove(id) [Approval Screening]
+    Controller->>ModelOp: getScreeningDetails(id) & Cek Shift Kuning Sebelumnya
+    Controller->>ModelOp: is_approved = 1
+    ModelOp->>DB: UPDATE trs_omzet_position SET is_approved = 1
+
+    Note over Kasir, LeaderAkun: 4. Penyerahan ke Pickup & Auto-Jurnal Bank
+    Kasir->>Controller: actionProcess(id) [Pindah ke Pickup Pusat (3) / Pickup Mandiri (4)]
+    Controller->>ModelOp: save() [status = STAT_PICKUP, is_approved = 0]
+    ModelOp->>DB: INSERT INTO trs_omzet_position
+
+    LeaderAkun->>Controller: actionApprove(id) [Pilih Akun COA Bank via POST id_coa_bank]
+    Controller->>DB: Begin Database Transaction
+    Controller->>ModelOp: is_approved = 1
+    ModelOp->>DB: UPDATE trs_omzet_position SET is_approved = 1 (Pickup)
+    
+    Controller->>Helper: generateJournalNumber('PKP', branch)
+    Helper-->>Controller: Return Nomor JU-PKP-...
+    Controller->>DB: INSERT INTO trs_journal (PKP, source = pickup_omzet:id)
+    Controller->>DB: INSERT INTO trs_journal_detail (Debit: Bank, Kredit: Kas 1.1.1.1)
+    
+    Controller->>ModelOp: Create closing record (status = 5 STAT_EMP_BANK, is_approved = 2)
+    ModelOp->>DB: INSERT INTO trs_omzet_position (Pegawai Bank)
+    Controller->>DB: Commit Database Transaction
+    Controller-->>LeaderAkun: Flash Success & Redirect
